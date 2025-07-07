@@ -120,3 +120,15 @@ message LoadJsonKeyIndexInfo {
   common.LoadPriority load_priority = 8;
   bool enable_mmap = 9;
 }
+
+message LoadSkipIndexInfo {
+  int64 FieldId = 1;
+  int64 version = 2;
+  int64 buildId = 3;
+  repeated string files = 4;
+  schema.FieldSchema schema = 5;
+  int64 collectionID = 6;
+  int64 partitionId = 7;
+  common.LoadPriority load_priority = 8;
+  bool enable_mmap = 9;
+}
