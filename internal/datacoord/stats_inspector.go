@@ -139,6 +139,7 @@ func (si *statsInspector) triggerStatsTaskLoop() {
 			si.triggerTextStatsTask()
 			si.triggerBM25StatsTask()
 			lastJSONStatsLastTrigger, maxJSONStatsTaskCount = si.triggerJsonKeyIndexStatsTask(lastJSONStatsLastTrigger, maxJSONStatsTaskCount)
+			si.triggerSkipIndexStatsTask()
 
 		case segID := <-getStatsTaskChSingleton():
 			log.Info("receive new segment to trigger stats task", zap.Int64("segmentID", segID))
@@ -228,6 +229,24 @@ func needDoJsonKeyIndex(segment *SegmentInfo, fieldIDs []UniqueID) bool {
 	return false
 }
 
+func needDoSkipIndex(segment *SegmentInfo, fieldsIDs []UniqueID) bool {
+	if !isFlush(segment) || segment.GetLevel() == datapb.SegmentLevel_L0 || 
+		!segment.GetIsSorted() {
+			return false
+	}
+
+	for _, fieldId := range fieldsIDs {
+		if segment.GetSkipIndexStats() == nil {
+			return true
+		}
+		if segment.GetSkipIndexStats()[fieldId] == nil {
+			return true
+		}
+	}
+
+	return false
+}
+
 func needDoBM25(segment *SegmentInfo, fieldIDs []UniqueID) bool {
 	// TODO: docking bm25 stats task
 	return false
@@ -289,6 +308,30 @@ func (si *statsInspector) triggerJsonKeyIndexStatsTask(lastJSONStatsLastTrigger 
 		}
 	}
 	return lastJSONStatsLastTrigger, maxJSONStatsTaskCount
+}
+
+func (si *statsInspector) triggerSkipIndexStatsTask() {
+	collections := si.mt.GetCollections()
+	for _, collection := range collections {
+		needTriggerFieldIds := make([]UniqueID, 0)
+		for _, field := range collection.Schema.GetFields() {
+			h := typeutil.CreateFieldSchemaHelper(field)
+			if h.EnableSkipIndex() {
+				needTriggerFieldIds = append(needTriggerFieldIds, field.GetFieldID())
+			}
+		}
+		segments := si.mt.SelectSegments(si.ctx, WithCollection(collection.ID), SegmentFilterFunc(func(seg *SegmentInfo) bool {
+			return needDoSkipIndex(seg, needTriggerFieldIds)
+		}))
+
+		for _, segment := range segments {
+			if err := si.SubmitStatsTask(segment.GetID(), segment.GetID(), indexpb.StatsSubJob_SkipIndexJob, true); err != nil {
+				log.Warn("create stats task with skip index for segment failed, wait for retry",
+					zap.Int64("segmentID", segment.GetID()), zap.Error(err))
+				continue
+			}
+		}
+	}
 }
 
 func (si *statsInspector) triggerBM25StatsTask() {
